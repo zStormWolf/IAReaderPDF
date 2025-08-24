@@ -58,7 +58,7 @@ Sigue estos pasos para ejecutar la aplicación en tu máquina local:
 
 ### 1. Clona el Repositorio
 ```bash
-git clone https://github.com/tu-usuario/ia-pdf-reader.git
+git clone https://github.com/zStormWolf/ia-pdf-reader.git
 cd ia-pdf-reader
 ```
 
