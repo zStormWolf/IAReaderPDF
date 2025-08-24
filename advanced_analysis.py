@@ -109,56 +109,62 @@ class AdvancedAnalyzer:
         except Exception as e:
             return f"Error generando resumen: {str(e)}"
     
-    def extract_entities(self, text: str) -> List[Dict[str, Any]]:
-        """Extrae entidades nombradas del texto"""
+    def extract_entities(self, text: str) -> Tuple[List[Dict[str, Any]], str]:
+        """Extrae entidades nombradas del texto y devuelve un posible error."""
         entities = []
+        error_message = None
         
         try:
-            if self.nlp:
-                # Usar spaCy si está disponible
-                doc = self.nlp(text[:1000000])  # Limitar texto para evitar problemas de memoria
-                
-                entity_counts = Counter()
-                entity_examples = {}
-                
-                for ent in doc.ents:
-                    entity_type = ent.label_
-                    entity_text = ent.text.strip()
-                    
-                    if len(entity_text) > 1:  # Filtrar entidades muy cortas
-                        entity_counts[entity_type] += 1
-                        
-                        if entity_type not in entity_examples:
-                            entity_examples[entity_type] = []
-                        
-                        if entity_text not in entity_examples[entity_type]:
-                            entity_examples[entity_type].append(entity_text)
-                
-                # Convertir a formato de salida
-                for entity_type, count in entity_counts.items():
-                    entities.append({
-                        'type': self._translate_entity_type(entity_type),
-                        'count': count,
-                        'examples': entity_examples[entity_type][:5]  # Máximo 5 ejemplos
-                    })
-            
-            else:
-                # Fallback: usar patrones regex simples
+            if not self.nlp:
+                error_message = "El modelo de NLP (spaCy) no está cargado. Se utilizará un análisis básico."
                 entities = self._extract_entities_regex(text)
+                return sorted(entities, key=lambda x: x['count'], reverse=True), error_message
+
+            if not text or len(text.strip()) < 20:
+                return [], "El texto es demasiado corto para extraer entidades."
+
+            # Usar spaCy si está disponible
+            doc = self.nlp(text[:1000000])  # Limitar texto para evitar problemas de memoria
+            
+            entity_counts = Counter()
+            entity_examples = {}
+            
+            for ent in doc.ents:
+                entity_type = ent.label_
+                entity_text = ent.text.strip()
+                
+                if len(entity_text) > 1:  # Filtrar entidades muy cortas
+                    entity_counts[entity_type] += 1
+                    
+                    if entity_type not in entity_examples:
+                        entity_examples[entity_type] = []
+                    
+                    if entity_text not in entity_examples[entity_type]:
+                        entity_examples[entity_type].append(entity_text)
+            
+            # Convertir a formato de salida
+            for entity_type, count in entity_counts.items():
+                entities.append({
+                    'type': self._translate_entity_type(entity_type),
+                    'count': count,
+                    'examples': entity_examples[entity_type][:5]  # Máximo 5 ejemplos
+                })
             
         except Exception as e:
-            print(f"Error extrayendo entidades: {str(e)}")
+            error_message = f"Error al extraer entidades: {str(e)}"
+            print(error_message)
         
-        return sorted(entities, key=lambda x: x['count'], reverse=True)
+        return sorted(entities, key=lambda x: x['count'], reverse=True), error_message
     
-    def extract_keywords(self, text: str, max_keywords: int = 20) -> List[Tuple[str, float]]:
-        """Extrae palabras clave usando TF-IDF"""
+    def extract_keywords(self, text: str, max_keywords: int = 20) -> Tuple[List[Tuple[str, float]], str]:
+        """Extrae palabras clave usando TF-IDF y devuelve un posible error."""
+        error_message = None
         try:
             # Limpiar y preparar texto
             cleaned_text = self._clean_text_for_analysis(text)
             
             if len(cleaned_text.split()) < 10:
-                return []
+                return [], "El texto es demasiado corto para extraer palabras clave significativas."
             
             # Usar TF-IDF para extraer palabras clave
             vectorizer = TfidfVectorizer(
@@ -177,11 +183,12 @@ class AdvancedAnalyzer:
             keyword_scores = list(zip(feature_names, tfidf_scores))
             keyword_scores.sort(key=lambda x: x[1], reverse=True)
             
-            return keyword_scores[:max_keywords]
+            return keyword_scores[:max_keywords], None
             
         except Exception as e:
-            print(f"Error extrayendo palabras clave: {str(e)}")
-            return []
+            error_message = f"Error al extraer palabras clave: {str(e)}"
+            print(error_message)
+            return [], error_message
     
     def get_document_stats(self, text: str) -> Dict[str, Any]:
         """Obtiene estadísticas detalladas del documento"""

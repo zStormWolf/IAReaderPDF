@@ -1,14 +1,13 @@
 import streamlit as st
-import os
-import tempfile
-from datetime import datetime
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-from streamlit_option_menu import option_menu
 from streamlit_chat import message
-
-# Importar módulos personalizados
+from streamlit_option_menu import option_menu
+import os
+import tempfile
+import requests
+import json
+from datetime import datetime
 from pdf_processor import PDFProcessor
 from semantic_search import SemanticSearch
 from document_manager import DocumentManager
@@ -67,6 +66,16 @@ if 'doc_manager' not in st.session_state:
     st.session_state.doc_manager = DocumentManager()
 if 'analyzer' not in st.session_state:
     st.session_state.analyzer = AdvancedAnalyzer()
+if 'ollama_model' not in st.session_state:
+    st.session_state.ollama_model = 'mixtral:8x7b'
+if 'ollama_temperature' not in st.session_state:
+    st.session_state.ollama_temperature = 0.3
+if 'ollama_timeout' not in st.session_state:
+    # Tiempo de espera en segundos para la petición HTTP a Ollama
+    st.session_state.ollama_timeout = 120
+if 'ollama_num_predict' not in st.session_state:
+    # Límite de tokens a predecir: reduce carga y RAM
+    st.session_state.ollama_num_predict = 400
 
 def main():
     # Header principal
@@ -214,6 +223,15 @@ def show_upload():
         status_text.text("¡Procesamiento completado!")
         st.balloons()
 
+def submit_question():
+    """Función callback para procesar la pregunta del usuario."""
+    question = st.session_state.chat_input_widget
+    if question:
+        selected_doc = st.session_state.get('selected_doc_chat', 'all')
+        process_question(question, selected_doc)
+        # Limpiar el input después de enviar
+        st.session_state.chat_input_widget = ""
+
 def show_chat():
     st.markdown("## 💬 Chat con tus PDFs")
     
@@ -228,7 +246,8 @@ def show_chat():
     selected_doc = st.selectbox(
         "Selecciona el documento para consultar:",
         options=list(doc_options.keys()),
-        format_func=lambda x: doc_options[x]
+        format_func=lambda x: doc_options[x],
+        key='selected_doc_chat'
     )
     
     # Área de chat
@@ -241,27 +260,20 @@ def show_chat():
             message(question, is_user=True, key=f"user_{i}")
             message(answer, key=f"bot_{i}")
     
-    # Input para nueva pregunta
-    user_question = st.text_input(
-        "Haz una pregunta sobre el documento:",
+    # Input para nueva pregunta con callback
+    st.text_input(
+        "Haz una pregunta sobre el documento (presiona Enter para enviar):",
         placeholder="Ej: ¿Cuál es el tema principal del documento?",
-        key="chat_input"
+        key="chat_input_widget",
+        on_change=submit_question
     )
     
-    col1, col2, col3 = st.columns([1, 1, 4])
-    
-    with col1:
-        if st.button("🚀 Enviar", type="primary"):
-            if user_question:
-                process_question(user_question, selected_doc)
-    
-    with col2:
-        if st.button("🗑️ Limpiar Chat"):
-            st.session_state.chat_history = []
-            st.rerun()
+    if st.button("🗑️ Limpiar Chat"):
+        st.session_state.chat_history = []
+        st.rerun()
 
 def process_question(question, doc_id):
-    """Procesa una pregunta del usuario"""
+    """Procesa una pregunta del usuario."""
     try:
         # Buscar respuesta usando búsqueda semántica
         if doc_id == 'all':
@@ -276,21 +288,83 @@ def process_question(question, doc_id):
         else:
             st.session_state.chat_history.append((question, "No encontré información relevante para responder tu pregunta."))
         
-        st.rerun()
-        
     except Exception as e:
         st.error(f"Error procesando la pregunta: {str(e)}")
 
 def generate_answer(question, search_results):
-    """Genera una respuesta basada en los resultados de búsqueda"""
+    """Genera una respuesta usando Ollama con Mixtral"""
     # Combinar contexto de los resultados
     context = "\n".join([result['text'] for result in search_results])
     
-    # Respuesta simple basada en el contexto
-    if len(context) > 500:
-        context = context[:500] + "..."
+    # Limitar el contexto para evitar prompts muy largos
+    if len(context) > 2000:
+        context = context[:2000] + "..."
     
-    return f"Basándome en el contenido del documento:\n\n{context}\n\n💡 Esta información responde a tu pregunta sobre: {question}"
+    # Preparar el prompt para Mixtral
+    prompt = f"""Eres un asistente experto en analizar documentos PDF. Responde de manera clara, precisa y concisa en español.
+
+Contexto del documento:
+{context}
+
+Pregunta del usuario: {question}
+
+Instrucciones:
+- Responde SOLO basándote en el contexto proporcionado
+- Si no encuentras información relevante, dilo claramente
+- Usa un tono profesional pero amigable
+- Estructura tu respuesta de manera clara
+
+Respuesta:"""
+    
+    # Usar solo el modelo configurado
+    model_name = st.session_state.get('ollama_model', 'mixtral:8x7b')
+    try:
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": model_name,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": float(st.session_state.get('ollama_temperature', 0.3)),
+                    "top_p": 0.9,
+                    "num_predict": int(st.session_state.get('ollama_num_predict', 400))
+                }
+            },
+            timeout=int(st.session_state.get('ollama_timeout', 120))
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("response", "Error: No se pudo obtener respuesta del modelo.")
+
+        if response.status_code == 404:
+            return (
+                f"⚠️ Modelo de Ollama no encontrado: {model_name}.\n"
+                f"Instálalo con: ollama pull {model_name}\n\n"
+                "Respuesta básica basada en el contexto:\n\n" + context[:500] + "..."
+            )
+
+        return (
+            f"❌ Error HTTP {response.status_code} desde Ollama con el modelo {model_name}.\n\n"
+            "Respuesta básica basada en el contexto:\n\n" + context[:500] + "..."
+        )
+
+    except requests.exceptions.ConnectionError:
+        return (
+            "⚠️ Ollama no está disponible. Asegúrate de ejecutar 'ollama serve'.\n\n"
+            "Respuesta básica basada en el contexto:\n\n" + context[:500] + "..."
+        )
+    except requests.exceptions.Timeout:
+        return (
+            f"⏱️ Timeout al consultar el modelo {model_name}.\n\n"
+            "Respuesta básica basada en el contexto:\n\n" + context[:500] + "..."
+        )
+    except Exception as e:
+        return (
+            f"❌ Error con Ollama: {str(e)}\n\n"
+            "Respuesta básica basada en el contexto:\n\n" + context[:500] + "..."
+        )
 
 def show_analysis():
     st.markdown("## 📊 Análisis Avanzado de Documentos")
@@ -320,16 +394,19 @@ def show_analysis():
         
         with tab2:
             st.markdown("### 🏷️ Entidades Identificadas")
-            entities = st.session_state.analyzer.extract_entities(doc_data['content']['text'])
+            entities, error = st.session_state.analyzer.extract_entities(doc_data['content']['text'])
             
+            if error:
+                st.error(f"Error al analizar entidades: {error}")
+
             if entities:
                 df_entities = pd.DataFrame(entities)
                 fig = px.bar(df_entities, x='type', y='count', title="Tipos de Entidades Encontradas")
                 st.plotly_chart(fig, use_container_width=True)
                 
                 st.dataframe(df_entities)
-            else:
-                st.info("No se encontraron entidades específicas.")
+            elif not error:
+                st.info("No se encontraron entidades específicas en el documento.")
         
         with tab3:
             st.markdown("### 📊 Estadísticas del Documento")
@@ -347,13 +424,18 @@ def show_analysis():
         
         with tab4:
             st.markdown("### 🔍 Palabras Clave Principales")
-            keywords = st.session_state.analyzer.extract_keywords(doc_data['content']['text'])
+            keywords, error = st.session_state.analyzer.extract_keywords(doc_data['content']['text'])
+
+            if error:
+                st.error(f"Error al extraer palabras clave: {error}")
             
             if keywords:
                 df_keywords = pd.DataFrame(keywords, columns=['Palabra', 'Relevancia'])
                 fig = px.bar(df_keywords.head(10), x='Relevancia', y='Palabra', 
                            orientation='h', title="Top 10 Palabras Clave")
                 st.plotly_chart(fig, use_container_width=True)
+            elif not error:
+                st.info("No se encontraron palabras clave en el documento.")
 
 def show_documents():
     st.markdown("## 📂 Gestión de Documentos")
@@ -412,11 +494,35 @@ def show_settings():
     st.markdown("#### 📊 Análisis de Texto")
     language = st.selectbox("Idioma principal:", ["es", "en"])
     
+    # Configuraciones de generación (Ollama)
+    st.markdown("#### 🧠 Generación (Ollama)")
+    ollama_model = st.text_input(
+        "Modelo de Ollama (instalado):",
+        value=st.session_state.get('ollama_model', 'mixtral:8x7b'),
+        help="Ejemplos: mixtral:8x7b, mixtral:8x7b-instruct, mistral:latest, llama3:8b"
+    )
+    ollama_temp = st.slider(
+        "Temperature (precisión vs creatividad)", 0.0, 1.0, float(st.session_state.get('ollama_temperature', 0.3)), 0.05
+    )
+    st.caption("Usa valores bajos (0.1-0.3) para respuestas más precisas.")
+    ollama_timeout = st.number_input(
+        "Timeout de Ollama (segundos)", min_value=15, max_value=600, value=int(st.session_state.get('ollama_timeout', 120)), step=5,
+        help="Aumenta si tu modelo tarda en responder."
+    )
+    ollama_num_predict = st.number_input(
+        "num_predict (tokens de salida)", min_value=50, max_value=2000, value=int(st.session_state.get('ollama_num_predict', 400)), step=50,
+        help="Reduce para menor uso de RAM/CPU y respuestas más rápidas."
+    )
+    
     # Configuraciones de interfaz
     st.markdown("#### 🎨 Interfaz")
     theme = st.selectbox("Tema:", ["Claro", "Oscuro"])
     
     if st.button("💾 Guardar Configuración"):
+        st.session_state.ollama_model = ollama_model.strip() or 'mixtral:8x7b'
+        st.session_state.ollama_temperature = float(ollama_temp)
+        st.session_state.ollama_timeout = int(ollama_timeout)
+        st.session_state.ollama_num_predict = int(ollama_num_predict)
         st.success("✅ Configuración guardada correctamente")
 
 if __name__ == "__main__":

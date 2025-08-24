@@ -43,12 +43,13 @@ Aplicación web avanzada construida con Streamlit que permite subir documentos P
 - **Búsqueda**: FAISS (Facebook AI Similarity Search)
 - **Análisis**: Scikit-learn, Pandas, NumPy
 - **Visualización**: Plotly Express, Matplotlib
+- **Generación de respuestas**: Ollama + Mixtral 8x7B (configurable)
 
 ## 📋 Requisitos del Sistema
 
 - Python 3.8 o superior
-- 4GB RAM mínimo (8GB recomendado)
-- 2GB espacio libre en disco
+- RAM: 8GB mínimo (16–32GB recomendado para Mixtral 8x7B)
+- Disco: 5GB mínimo (≈26GB adicionales si usas Mixtral 8x7B)
 - Conexión a internet (para descargar modelos la primera vez)
 
 ## 🚀 Instalación y Uso
@@ -74,7 +75,19 @@ source venv/bin/activate
 ```bash
 pip install -r requirements.txt
 ```
-**Nota**: La primera vez que ejecutes la aplicación, se descargarán automáticamente los modelos de lenguaje necesarios. Esto puede tardar unos minutos.
+**Nota**: La generación de respuestas usa Ollama. Debes instalar Ollama y descargar el modelo que vayas a utilizar.
+
+### 4. Instala Ollama y el Modelo
+- Instala Ollama: https://ollama.ai
+- Inicia el servidor (si no está ya corriendo):
+```bash
+ollama serve
+```
+- Descarga el modelo recomendado (Mixtral 8x7B):
+```bash
+ollama pull mixtral:8x7b
+```
+> Alternativas más ligeras: `mistral:latest`, `llama3:8b`
 
 ## 🎯 Uso de la Aplicación
 
@@ -96,6 +109,13 @@ La aplicación se abrirá automáticamente en `http://localhost:8501`
 2. Selecciona el documento o "Todos los documentos"
 3. Escribe tu pregunta en lenguaje natural
 4. Obtén respuestas basadas en el contenido
+
+### 6. Configurar la Generación (Ollama)
+En la pestaña "⚙️ Configuración" → "🧠 Generación (Ollama)" puedes ajustar:
+- **Modelo**: por ejemplo `mixtral:8x7b` (requiere `ollama pull mixtral:8x7b`), o `mistral:latest`, `llama3:8b`.
+- **Temperature**: 0.0–1.0 (recomendado 0.2–0.3 para precisión).
+- **Timeout (segundos)**: aumenta si el modelo tarda en responder (p. ej., 300–600).
+- **num_predict**: tokens de salida generados; reducirlo baja el uso de RAM/CPU (p. ej., 100–300).
 
 ### 5. Analizar contenido
 1. Ve a la sección "📊 Análisis"
@@ -152,6 +172,12 @@ Puedes cambiar el modelo de embeddings en la configuración:
 - **max_keywords**: Máximo palabras clave a extraer (10-50)
 - **summary_sentences**: Oraciones en resúmenes (2-5)
 
+### Generación (Ollama)
+- **Modelo**: `mixtral:8x7b` (recomendado) u otros compatibles con Ollama.
+- **Temperature**: controla creatividad vs precisión.
+- **Timeout**: límite de espera de la petición a Ollama.
+- **num_predict**: número de tokens de salida. Valores bajos reducen uso de memoria y latencia.
+
 ## 🔧 Solución de Problemas
 
 ### Error: Modelo spaCy no encontrado
@@ -165,9 +191,29 @@ python -m spacy download en_core_web_sm
 ```
 
 ### Error: Memoria insuficiente
-- Reduce el tamaño de chunk_size en la configuración
-- Procesa documentos más pequeños
-- Aumenta la RAM del sistema
+- Reduce `num_predict` en la Configuración (Generación).
+- Usa un modelo más ligero (`mistral:latest`, `llama3:8b`).
+- Sube gradualmente el `timeout` para evitar reintentos costosos.
+- Reduce `chunk_size` si procesas documentos muy grandes.
+- Cierra procesos que compitan por RAM.
+
+### Error: 404 al generar con Ollama (modelo no encontrado)
+- Verifica el nombre del modelo en la Configuración (exacto a `ollama list`).
+- Descárgalo con `ollama pull <modelo>`.
+- Si persiste, reinicia el servidor de Ollama:
+  ```bash
+  # Windows PowerShell
+  Get-Process *ollama* | Stop-Process -Force
+  ollama serve
+  ```
+
+### Error: ⏱️ Timeout al generar
+- Aumenta el `Timeout (segundos)` en Configuración.
+- Reduce `num_predict` (menos tokens a generar).
+- Precalienta el modelo una vez:
+  ```bash
+  ollama run mixtral:8x7b "ok"
+  ```
 
 ### Error: FAISS no funciona
 ```bash
